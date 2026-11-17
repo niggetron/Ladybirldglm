@@ -107,6 +107,30 @@ jobs:
           mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
           echo "Using vcpkg at baseline: $REV"
 
+      - name: Allow a real native compiler for meson cross-ports
+        run: |
+          # vcpkg's default none.txt makes the build-machine compiler 'false',
+          # which breaks Ladybird's libpsl overlay port (its meson.build needs a
+          # native C compiler). Provide a proper x86_64-linux native file.
+          cat > /opt/vcpkg/scripts/buildsystems/meson/none.txt <<'NATIVEFILE'
+          [host_machine]
+          system = 'linux'
+          cpu_family = 'x86_64'
+          cpu = 'x86_64'
+          endian = 'little'
+
+          [properties]
+
+          [binaries]
+          c = '/usr/bin/gcc'
+          cpp = '/usr/bin/g++'
+          ar = '/usr/bin/gcc-ar'
+          strip = '/usr/bin/strip'
+          pkgconfig = '/usr/bin/pkg-config'
+          NATIVEFILE
+          echo "--- patched none.txt ---"
+          cat /opt/vcpkg/scripts/buildsystems/meson/none.txt
+
       - name: Patch Android app build (arm64-v8a only + version name)
         run: |
           sed -i 's/abiFilters += listOf("x86_64", "arm64-v8a")/abiFilters += listOf("arm64-v8a")/' UI/Android/build.gradle.kts
