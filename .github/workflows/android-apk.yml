@@ -1,0 +1,171 @@
+name: Ladybird Android APK (arm64)
+
+# Builds the arm64-v8a APK from the ORIGINAL Ladybird repo
+# (LadybirdBrowser/ladybird) and publishes it to this repo's Releases.
+#
+# Triggers:
+#  - every push to this repository (auto build + auto release)
+#  - every 7 days automatically (weekly cron)
+#  - manually via the "Run workflow" button (workflow_dispatch)
+
+on:
+  push:
+  schedule:
+    # Every Monday 00:00 UTC = every 7 days
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+env:
+  LADYBIRD_CACHE_DIR: ${{ github.workspace }}/Build/caches
+  VCPKG_ROOT: /opt/vcpkg
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-binary-cache
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - name: Checkout original Ladybird repo (master)
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: LadybirdBrowser/ladybird
+          ref: master
+          fetch-depth: 1
+
+      - name: Compute version name and tag
+        id: ver
+        run: |
+          BUILD_DATE=$(date -u +%Y%m%d)
+          FULL_SHA=$(git rev-parse HEAD)
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          VERSION="1.0-nightly-${BUILD_DATE}-${SHORT_SHA}"
+          TAG="nightly-${BUILD_DATE}-${SHORT_SHA}"
+          echo "build_date=${BUILD_DATE}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "full_sha=${FULL_SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install Rust toolchain (pinned by Ladybird)
+        run: rustup toolchain install 1.98.0 --profile minimal
+
+      - name: Install wasm-tools
+        run: |
+          VERSION=1.243.0
+          FILE="wasm-tools-${VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL -o "$FILE" "https://github.com/bytecodealliance/wasm-tools/releases/download/v${VERSION}/${FILE}"
+          tar -xzf "$FILE"
+          mv "wasm-tools-${VERSION}-x86_64-linux/wasm-tools" /usr/local/bin/
+          rm -rf "$FILE" "wasm-tools-${VERSION}-x86_64-linux"
+          wasm-tools --version
+
+      - name: Install Android SDK components (NDK, CMake, SDK 35)
+        run: |
+          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "build-tools;35.0.0" \
+            "platforms;android-35" \
+            "cmake;3.31.6" \
+            "ndk;29.0.13599879" > /dev/null
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-binary-cache
+          key: vcpkg-arm64-android-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-arm64-android-
+
+      - name: Set up vcpkg (pinned to Ladybird's builtin-baseline)
+        run: |
+          REV=$(python3 -c "import json; print(json.load(open('vcpkg.json'))['builtin-baseline'])")
+          git clone --filter=blob:none https://github.com/microsoft/vcpkg.git /opt/vcpkg
+          git -C /opt/vcpkg checkout "$REV"
+          /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+          echo "Using vcpkg at baseline: $REV"
+
+      - name: Patch Android app build (arm64-v8a only + version name)
+        run: |
+          sed -i 's/abiFilters += listOf("x86_64", "arm64-v8a")/abiFilters += listOf("arm64-v8a")/' UI/Android/build.gradle.kts
+          sed -i "s/versionCode = 1$/versionCode = ${BUILD_DATE}/" UI/Android/build.gradle.kts
+          sed -i "s/versionName = \"1.0\"/versionName = \"${VERSION}\"/" UI/Android/build.gradle.kts
+          echo "--- patched build.gradle.kts (version/abi lines) ---"
+          grep -nE "versionCode|versionName|abiFilters" UI/Android/build.gradle.kts
+        env:
+          BUILD_DATE: ${{ steps.ver.outputs.build_date }}
+          VERSION: ${{ steps.ver.outputs.version }}
+
+      - name: Build arm64-v8a release APK
+        working-directory: UI/Android
+        run: ./gradlew --no-daemon assembleRelease
+        env:
+          GRADLE_OPTS: '-Xmx3072m'
+
+      - name: Sign APK
+        run: |
+          UNSIGNED=$(find UI/Android/build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "Unsigned APK: $UNSIGNED"
+          keytool -genkeypair -v \
+            -keystore release.keystore \
+            -alias ladybird \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass ladybird-sign-2026 -keypass ladybird-sign-2026 \
+            -dname "CN=Ladybird Android, OU=CI, O=niggetron, L=Internet, S=Internet, C=US"
+          BT="${ANDROID_SDK_ROOT}/build-tools/35.0.0"
+          "$BT/zipalign" -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign \
+            --ks release.keystore \
+            --ks-pass pass:ladybird-sign-2026 \
+            --key-pass pass:ladybird-sign-2026 \
+            --out "Ladybird-${{ steps.ver.outputs.version }}-arm64.apk" \
+            aligned.apk
+          "$BT/apksigner" verify "Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
+          ls -lh "Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
+
+      - name: Publish to GitHub Releases
+        run: |
+          APK="Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
+          COMMIT_URL="https://github.com/LadybirdBrowser/ladybird/commit/${{ steps.ver.outputs.full_sha }}"
+          BODY=$(cat <<EOF
+          Automated arm64-v8a Android build of **Ladybird**, built from the original repository
+          [LadybirdBrowser/ladybird](https://github.com/LadybirdBrowser/ladybird) @ \`${{ steps.ver.outputs.short_sha }}\`.
+
+          | | |
+          |---|---|
+          | App versionName | \`${{ steps.ver.outputs.version }}\` |
+          | Upstream commit | $COMMIT_URL |
+          | Built | ${{ steps.ver.outputs.build_date }} (UTC) |
+          | ABI | arm64-v8a |
+          | Requires | Android 11+ (API 30) |
+
+          ### Install
+          Download \`$APK\` and install it on your device (you may need to allow installing from unknown sources).
+
+          > Note: this APK is signed with an auto-generated CI key, not the Play Store key.
+          > Ladybird Android is a work-in-progress port; expect bugs.
+          EOF
+          )
+          gh release create "${{ steps.ver.outputs.tag }}" "$APK" \
+            --title "Ladybird Android ${{ steps.ver.outputs.version }}" \
+            --notes "$BODY" \
+            --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
