@@ -53,6 +53,11 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
+      - name: Install system build tools (for vcpkg ports)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake autoconf-archive libtool pkg-config nasm
+
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:
