@@ -148,6 +148,18 @@ jobs:
           # memfd_create path instead (Android supports memfd_create).
           sed -i 's|#\[cfg(target_os = "linux")\]|#[cfg(any(target_os = "linux", target_os = "android"))]|' Libraries/LibIPC/Rust/src/shared_memory.rs
           sed -i 's|#\[cfg(not(target_os = "linux"))\]|#[cfg(not(any(target_os = "linux", target_os = "android")))]|' Libraries/LibIPC/Rust/src/shared_memory.rs
+          # Seccomp.cpp (which defines set_connect_broker_fd) is excluded on
+          # Android, but helper main.cpp files still call it. Add an inline no-op.
+          python3 - <<'PY'
+          p = 'Libraries/LibSandbox/ConnectBroker.h'
+          s = open(p).read()
+          s = s.replace('void set_connect_broker_fd(int);', '''#if defined(AK_OS_ANDROID)
+          inline void set_connect_broker_fd(int) {}
+          #else
+          void set_connect_broker_fd(int);
+          #endif''')
+          open(p, 'w').write(s)
+          PY
           echo "--- patched build.gradle.kts (version/abi lines) ---"
           grep -nE "versionCode|versionName|abiFilters" UI/Android/build.gradle.kts
         env:
