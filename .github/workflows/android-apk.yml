@@ -139,9 +139,9 @@ jobs:
         run: |
           sed -i "s/versionCode = 1$/versionCode = ${BUILD_DATE}/" UI/Android/build.gradle.kts
           sed -i "s/versionName = \"1.0\"/versionName = \"${VERSION}\"/" UI/Android/build.gradle.kts
-          # Upstream regression: harfbuzz is not in the Android vcpkg manifest
-          # (see vcpkg.json platform filters), but this check is unconditional.
-          sed -i 's/find_package(harfbuzz REQUIRED)/find_package(harfbuzz QUIET)/' Meta/CMake/check_for_dependencies.cmake
+          # LibGfx needs harfbuzz on every platform; upstream's vcpkg.json
+          # forgot to include it for Android. Add it here (same features as Linux).
+          sed -i 's/"platform": "linux | bsd | windows"/"platform": "linux | bsd | windows | android"/' vcpkg.json
           # Upstream Android-only typo: post_event() takes an EventReceiver*, not a reference.
           sed -i 's/post_event(notifier, Core::Event::Type::NotifierActivation)/post_event(\&notifier, Core::Event::Type::NotifierActivation)/' Libraries/LibCore/EventLoopImplementationUnix.cpp
           # libc crate does not expose shm_open/shm_unlink on Android; use the
