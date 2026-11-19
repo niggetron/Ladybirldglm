@@ -144,6 +144,10 @@ jobs:
           sed -i 's/find_package(harfbuzz REQUIRED)/find_package(harfbuzz QUIET)/' Meta/CMake/check_for_dependencies.cmake
           # Upstream Android-only typo: post_event() takes an EventReceiver*, not a reference.
           sed -i 's/post_event(notifier, Core::Event::Type::NotifierActivation)/post_event(\&notifier, Core::Event::Type::NotifierActivation)/' Libraries/LibCore/EventLoopImplementationUnix.cpp
+          # libc crate does not expose shm_open/shm_unlink on Android; use the
+          # memfd_create path instead (Android supports memfd_create).
+          sed -i 's|#\[cfg(target_os = "linux")\]|#[cfg(any(target_os = "linux", target_os = "android"))]|' Libraries/LibIPC/Rust/src/shared_memory.rs
+          sed -i 's|#\[cfg(not(target_os = "linux"))\]|#[cfg(not(any(target_os = "linux", target_os = "android")))]|' Libraries/LibIPC/Rust/src/shared_memory.rs
           echo "--- patched build.gradle.kts (version/abi lines) ---"
           grep -nE "versionCode|versionName|abiFilters" UI/Android/build.gradle.kts
         env:
