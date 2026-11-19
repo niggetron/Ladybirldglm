@@ -1,7 +1,8 @@
-name: Ladybird Android APK (arm64)
+name: Ladybird Android APK (arm64 + armv7)
 
-# Builds the arm64-v8a APK from the ORIGINAL Ladybird repo
-# (LadybirdBrowser/ladybird) and publishes it to this repo's Releases.
+# Builds BOTH the arm64-v8a (64-bit) and armeabi-v7a (32-bit ARMv7) APKs
+# from the ORIGINAL Ladybird repo (LadybirdBrowser/ladybird) and publishes
+# both APKs in one GitHub Release in this repo.
 #
 # Triggers:
 #  - every push to this repository (auto build + auto release)
@@ -94,8 +95,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vcpkg-binary-cache
-          key: vcpkg-arm64-android-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          key: vcpkg-android-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
+            vcpkg-android-
             vcpkg-arm64-android-
 
       - name: Set up vcpkg (pinned to Ladybird's builtin-baseline)
@@ -131,30 +133,45 @@ jobs:
           echo "--- patched none.txt ---"
           cat /opt/vcpkg/scripts/buildsystems/meson/none.txt
 
-      - name: Patch Android app build (arm64-v8a only + version name)
+      - name: Patch Android app build (version name + upstream workarounds)
         run: |
-          sed -i 's/abiFilters += listOf("x86_64", "arm64-v8a")/abiFilters += listOf("arm64-v8a")/' UI/Android/build.gradle.kts
           sed -i "s/versionCode = 1$/versionCode = ${BUILD_DATE}/" UI/Android/build.gradle.kts
           sed -i "s/versionName = \"1.0\"/versionName = \"${VERSION}\"/" UI/Android/build.gradle.kts
           # Upstream regression: harfbuzz is not in the Android vcpkg manifest
           # (see vcpkg.json platform filters), but this check is unconditional.
           sed -i 's/find_package(harfbuzz REQUIRED)/find_package(harfbuzz QUIET)/' Meta/CMake/check_for_dependencies.cmake
+          # Upstream Android-only typo: post_event() takes an EventReceiver*, not a reference.
+          sed -i 's/post_event(notifier, Core::Event::Type::NotifierActivation)/post_event(\&notifier, Core::Event::Type::NotifierActivation)/' Libraries/LibCore/EventLoopImplementationUnix.cpp
           echo "--- patched build.gradle.kts (version/abi lines) ---"
           grep -nE "versionCode|versionName|abiFilters" UI/Android/build.gradle.kts
         env:
           BUILD_DATE: ${{ steps.ver.outputs.build_date }}
           VERSION: ${{ steps.ver.outputs.version }}
 
-      - name: Build arm64-v8a release APK
-        working-directory: UI/Android
-        run: ./gradlew --no-daemon assembleRelease
+      - name: Build arm64-v8a and armeabi-v7a release APKs
+        run: |
+          set -euo pipefail
+          build_abi() {
+            ABI="$1"
+            LABEL="$2"
+            echo "===== Building APK for ABI: ${ABI} ====="
+            sed -i "s/abiFilters += listOf(.*)/abiFilters += listOf(\"${ABI}\")/" UI/Android/build.gradle.kts
+            grep -n abiFilters UI/Android/build.gradle.kts
+            # Make sure no CMake/ABI state leaks between the two builds.
+            rm -rf UI/Android/.cxx UI/Android/build
+            ( cd UI/Android && ./gradlew --no-daemon assembleRelease )
+            UNSIGNED=$(find UI/Android/build/outputs/apk/release -name '*.apk' | head -n 1)
+            echo "Unsigned ${LABEL} APK: $UNSIGNED"
+            cp "$UNSIGNED" "${LABEL}-unsigned.apk"
+          }
+          build_abi arm64-v8a arm64
+          build_abi armeabi-v7a armv7
         env:
           GRADLE_OPTS: '-Xmx3072m'
 
-      - name: Sign APK
+      - name: Sign both APKs
         run: |
-          UNSIGNED=$(find UI/Android/build/outputs/apk/release -name '*.apk' | head -n 1)
-          echo "Unsigned APK: $UNSIGNED"
+          set -euo pipefail
           keytool -genkeypair -v \
             -keystore release.keystore \
             -alias ladybird \
@@ -162,40 +179,45 @@ jobs:
             -storepass ladybird-sign-2026 -keypass ladybird-sign-2026 \
             -dname "CN=Ladybird Android, OU=CI, O=niggetron, L=Internet, S=Internet, C=US"
           BT="${ANDROID_SDK_ROOT}/build-tools/35.0.0"
-          "$BT/zipalign" -f 4 "$UNSIGNED" aligned.apk
-          "$BT/apksigner" sign \
-            --ks release.keystore \
-            --ks-pass pass:ladybird-sign-2026 \
-            --key-pass pass:ladybird-sign-2026 \
-            --out "Ladybird-${{ steps.ver.outputs.version }}-arm64.apk" \
-            aligned.apk
-          "$BT/apksigner" verify "Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
-          ls -lh "Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
+          for LABEL in arm64 armv7; do
+            "$BT/zipalign" -f 4 "${LABEL}-unsigned.apk" "${LABEL}-aligned.apk"
+            "$BT/apksigner" sign \
+              --ks release.keystore \
+              --ks-pass pass:ladybird-sign-2026 \
+              --key-pass pass:ladybird-sign-2026 \
+              --out "Ladybird-${{ steps.ver.outputs.version }}-${LABEL}.apk" \
+              "${LABEL}-aligned.apk"
+            "$BT/apksigner" verify "Ladybird-${{ steps.ver.outputs.version }}-${LABEL}.apk"
+            ls -lh "Ladybird-${{ steps.ver.outputs.version }}-${LABEL}.apk"
+          done
 
       - name: Publish to GitHub Releases
         run: |
-          APK="Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
+          ARM64="Ladybird-${{ steps.ver.outputs.version }}-arm64.apk"
+          ARMV7="Ladybird-${{ steps.ver.outputs.version }}-armv7.apk"
           COMMIT_URL="https://github.com/LadybirdBrowser/ladybird/commit/${{ steps.ver.outputs.full_sha }}"
           BODY=$(cat <<EOF
-          Automated arm64-v8a Android build of **Ladybird**, built from the original repository
-          [LadybirdBrowser/ladybird](https://github.com/LadybirdBrowser/ladybird) @ \`${{ steps.ver.outputs.short_sha }}\`.
+          Automated Android builds of **Ladybird** (64-bit and 32-bit ARM), built from the
+          original repository [LadybirdBrowser/ladybird](https://github.com/LadybirdBrowser/ladybird)
+          @ \`${{ steps.ver.outputs.short_sha }}\`.
 
           | | |
           |---|---|
           | App versionName | \`${{ steps.ver.outputs.version }}\` |
           | Upstream commit | $COMMIT_URL |
           | Built | ${{ steps.ver.outputs.build_date }} (UTC) |
-          | ABI | arm64-v8a |
+          | ABIs | arm64-v8a (64-bit), armeabi-v7a (32-bit ARMv7) |
           | Requires | Android 11+ (API 30) |
 
-          ### Install
-          Download \`$APK\` and install it on your device (you may need to allow installing from unknown sources).
+          ### Which APK do I need?
+          - **$ARM64** — for almost all modern 64-bit Android phones/tablets.
+          - **$ARMV7** — for older 32-bit ARM devices (only install this on a 32-bit device).
 
-          > Note: this APK is signed with an auto-generated CI key, not the Play Store key.
+          > Note: these APKs are signed with an auto-generated CI key, not the Play Store key.
           > Ladybird Android is a work-in-progress port; expect bugs.
           EOF
           )
-          gh release create "${{ steps.ver.outputs.tag }}" "$APK" \
+          gh release create "${{ steps.ver.outputs.tag }}" "$ARM64" "$ARMV7" \
             --title "Ladybird Android ${{ steps.ver.outputs.version }}" \
             --notes "$BODY" \
             --latest
