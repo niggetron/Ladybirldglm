@@ -1,0 +1,226 @@
+set(FONTS
+    NotoEmoji.ttf
+    SerenitySans-Regular.ttf
+)
+list(TRANSFORM FONTS PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/fonts/")
+
+set(16x16_ICONS
+    open-parent-directory.png
+)
+set(32x32_ICONS
+    filetype-folder.png
+    filetype-unknown.png
+)
+set(48x48_ICONS
+    app-browser.png
+)
+list(TRANSFORM 16x16_ICONS PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/icons/16x16/")
+list(TRANSFORM 32x32_ICONS PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/icons/32x32/")
+list(TRANSFORM 48x48_ICONS PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/icons/48x48/")
+
+set(INTERNAL_RESOURCES
+    ladybird.css
+    utils.js
+    WebCompat.json
+)
+list(TRANSFORM INTERNAL_RESOURCES PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/ladybird/")
+
+set(ABOUT_PAGES
+    about.html
+    bookmarks.html
+    crashes.html
+    downloads.html
+    history.html
+    newtab.html
+    settings.html
+    support.html
+    version.html
+    webui.css
+    welcome.css
+    welcome.html
+    welcome.js
+)
+list(TRANSFORM ABOUT_PAGES PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/ladybird/about-pages/")
+
+set(ABOUT_SETTINGS_RESOURCES
+    advanced.js
+    appearance.js
+    blocking.js
+    browsing-behavior.js
+    content.js
+    dialog-deep-link.js
+    feedback.js
+    languages.js
+    network.js
+    permissions.js
+    privacy.js
+    search.js
+    services.js
+    startup.js
+    tabs.js
+)
+list(TRANSFORM ABOUT_SETTINGS_RESOURCES PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/ladybird/about-pages/settings/")
+
+set(WEB_TEMPLATES
+    directory.html
+    error.html
+)
+list(TRANSFORM WEB_TEMPLATES PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/ladybird/templates/")
+
+set(THEMES
+    Default.ini
+    Dark.ini
+)
+list(TRANSFORM THEMES PREPEND "${LADYBIRD_SOURCE_DIR}/Base/res/themes/")
+
+# PDF.js viewer assets are optional for builds without the PDF.js distribution.
+set(PDFJS_BUILD_FILES "")
+set(PDFJS_WEB_BASE_FILES "")
+set(PDFJS_WEB_IMAGE_FILES "")
+set(PDFJS_WEB_WASM_FILES "")
+set(PDFJS_WEB_LOCALE_JSON "")
+set(PDFJS_WEB_LOCALE_EN_US "")
+set(PDFJS_VIEWER_HTML "")
+if (PDFJS_FOUND)
+    file(GLOB PDFJS_BUILD_FILES "${PDFJS_DIR}/build/*.mjs")
+    set(_pdfjs_ladybird_dir "${LADYBIRD_SOURCE_DIR}/Base/res/ladybird/pdfjs")
+    set(PDFJS_WEB_BASE_FILES
+        "${_pdfjs_ladybird_dir}/pdfjs-ladybird-transport.mjs"
+        "${PDFJS_DIR}/web/viewer.mjs"
+        "${PDFJS_DIR}/web/viewer.css"
+    )
+    file(GLOB PDFJS_WEB_IMAGE_FILES "${PDFJS_DIR}/web/images/*")
+    file(GLOB PDFJS_WEB_WASM_FILES "${PDFJS_DIR}/web/wasm/*")
+    set(PDFJS_WEB_LOCALE_JSON "${PDFJS_DIR}/web/locale/locale.json")
+    set(PDFJS_WEB_LOCALE_EN_US "${PDFJS_DIR}/web/locale/en-US/viewer.ftl")
+    set(PDFJS_VIEWER_HTML "${PDFJS_DIR}/web/viewer.html")
+endif()
+
+function(copy_resource_set subdir)
+    cmake_parse_arguments(PARSE_ARGV 1 "COPY" "" "TARGET;DESTINATION" "RESOURCES")
+    set(inputs ${COPY_RESOURCES})
+
+    if (NOT inputs)
+        return()
+    endif()
+
+    if (APPLE)
+        target_sources(${COPY_TARGET} PRIVATE ${inputs})
+        set_source_files_properties(${inputs} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/${subdir}")
+    else()
+        set(outputs "")
+        foreach (input IN LISTS inputs)
+            get_filename_component(input_name "${input}" NAME)
+            list(APPEND outputs "${COPY_DESTINATION}/${subdir}/${input_name}")
+        endforeach()
+
+        add_custom_command(
+            OUTPUT ${outputs}
+            DEPENDS ${inputs}
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${COPY_DESTINATION}/${subdir}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${inputs}" "${COPY_DESTINATION}/${subdir}"
+            COMMAND_EXPAND_LISTS
+            VERBATIM
+        )
+        string(REPLACE "/" "_" subdir_underscores "${subdir}")
+        set(target_name "copy_${subdir_underscores}_resources_to_build")
+        while (TARGET ${target_name})
+            set(target_name "${target_name}_")
+        endwhile()
+        add_custom_target(${target_name} DEPENDS ${outputs})
+        add_dependencies(ladybird_codegen_accumulator ${target_name})
+        add_dependencies("${COPY_TARGET}_build_resource_files" ${target_name})
+    endif()
+endfunction()
+
+function(copy_resources_to_build base_directory bundle_target)
+    add_custom_target("${bundle_target}_build_resource_files")
+
+    copy_resource_set(fonts RESOURCES ${FONTS}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(icons/16x16 RESOURCES ${16x16_ICONS}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(icons/32x32 RESOURCES ${32x32_ICONS}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(icons/48x48 RESOURCES ${48x48_ICONS}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(themes RESOURCES ${THEMES}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    if (APPLE AND LADYBIRD_ICU_DATA_FILE)
+        copy_resource_set(icu RESOURCES ${LADYBIRD_ICU_DATA_FILE}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+    endif()
+
+    copy_resource_set(ladybird RESOURCES ${INTERNAL_RESOURCES}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(ladybird/about-pages RESOURCES ${ABOUT_PAGES}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(ladybird/about-pages/settings RESOURCES ${ABOUT_SETTINGS_RESOURCES}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    copy_resource_set(ladybird/templates RESOURCES ${WEB_TEMPLATES}
+        DESTINATION ${base_directory} TARGET ${bundle_target}
+    )
+
+    if (PDFJS_BUILD_FILES)
+        copy_resource_set(ladybird/pdfjs/build RESOURCES ${PDFJS_BUILD_FILES}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+        copy_resource_set(ladybird/pdfjs/web RESOURCES ${PDFJS_WEB_BASE_FILES} ${PDFJS_VIEWER_HTML}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+        copy_resource_set(ladybird/pdfjs/web/images RESOURCES ${PDFJS_WEB_IMAGE_FILES}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+        copy_resource_set(ladybird/pdfjs/web/wasm RESOURCES ${PDFJS_WEB_WASM_FILES}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+        copy_resource_set(ladybird/pdfjs/web/locale RESOURCES ${PDFJS_WEB_LOCALE_JSON}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+        copy_resource_set(ladybird/pdfjs/web/locale/en-US RESOURCES ${PDFJS_WEB_LOCALE_EN_US}
+            DESTINATION ${base_directory} TARGET ${bundle_target}
+        )
+    endif()
+
+    add_dependencies(${bundle_target} "${bundle_target}_build_resource_files")
+endfunction()
+
+function(install_ladybird_resources destination component)
+    install(FILES ${FONTS} DESTINATION "${destination}/fonts" COMPONENT ${component})
+    install(FILES ${16x16_ICONS} DESTINATION "${destination}/icons/16x16" COMPONENT ${component})
+    install(FILES ${32x32_ICONS} DESTINATION "${destination}/icons/32x32" COMPONENT ${component})
+    install(FILES ${48x48_ICONS} DESTINATION "${destination}/icons/48x48" COMPONENT ${component})
+    install(FILES ${THEMES} DESTINATION "${destination}/themes" COMPONENT ${component})
+    if (LADYBIRD_ICU_DATA_FILE)
+        install(FILES ${LADYBIRD_ICU_DATA_FILE} DESTINATION "${destination}/icu" COMPONENT ${component})
+    endif()
+    install(FILES ${INTERNAL_RESOURCES} DESTINATION "${destination}/ladybird" COMPONENT ${component})
+    install(FILES ${ABOUT_PAGES} DESTINATION "${destination}/ladybird/about-pages" COMPONENT ${component})
+    install(FILES ${ABOUT_SETTINGS_RESOURCES} DESTINATION "${destination}/ladybird/about-pages/settings" COMPONENT ${component})
+    install(FILES ${WEB_TEMPLATES} DESTINATION "${destination}/ladybird/templates" COMPONENT ${component})
+    if (PDFJS_BUILD_FILES)
+        install(FILES ${PDFJS_BUILD_FILES} DESTINATION "${destination}/ladybird/pdfjs/build" COMPONENT ${component})
+        install(FILES ${PDFJS_WEB_BASE_FILES} ${PDFJS_VIEWER_HTML} DESTINATION "${destination}/ladybird/pdfjs/web" COMPONENT ${component})
+        install(FILES ${PDFJS_WEB_IMAGE_FILES} DESTINATION "${destination}/ladybird/pdfjs/web/images" COMPONENT ${component})
+        install(FILES ${PDFJS_WEB_WASM_FILES} DESTINATION "${destination}/ladybird/pdfjs/web/wasm" COMPONENT ${component})
+        install(FILES ${PDFJS_WEB_LOCALE_JSON} DESTINATION "${destination}/ladybird/pdfjs/web/locale" COMPONENT ${component})
+        install(FILES ${PDFJS_WEB_LOCALE_EN_US} DESTINATION "${destination}/ladybird/pdfjs/web/locale/en-US" COMPONENT ${component})
+    endif()
+endfunction()
