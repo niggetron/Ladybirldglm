@@ -68,8 +68,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Install Rust toolchain (pinned by Ladybird)
-        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Install Rust toolchain (pinned by Ladybird) + Android targets
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup target add --toolchain 1.98.0 aarch64-linux-android armv7-linux-androideabi
 
       - name: Install wasm-tools
         run: |
@@ -154,9 +156,13 @@ jobs:
           build_abi() {
             ABI="$1"
             LABEL="$2"
-            echo "===== Building APK for ABI: ${ABI} ====="
+            RUST_TRIPLE="$3"
+            echo "===== Building APK for ABI: ${ABI} (Rust target: ${RUST_TRIPLE}) ====="
             sed -i "s/abiFilters += listOf(.*)/abiFilters += listOf(\"${ABI}\")/" UI/Android/build.gradle.kts
-            grep -n abiFilters UI/Android/build.gradle.kts
+            # Ladybird's CMake defaults the Rust target to the host; force the Android triple.
+            sed -i '/RUST_TARGET_TRIPLE/d' UI/Android/build.gradle.kts
+            sed -i "s/\"-DVCPKG_TARGET_ANDROID=ON\"/\"-DVCPKG_TARGET_ANDROID=ON\", \"-DRUST_TARGET_TRIPLE=${RUST_TRIPLE}\"/" UI/Android/build.gradle.kts
+            grep -nE "abiFilters|RUST_TARGET_TRIPLE" UI/Android/build.gradle.kts
             # Make sure no CMake/ABI state leaks between the two builds.
             rm -rf UI/Android/.cxx UI/Android/build
             ( cd UI/Android && ./gradlew --no-daemon assembleRelease )
@@ -164,8 +170,8 @@ jobs:
             echo "Unsigned ${LABEL} APK: $UNSIGNED"
             cp "$UNSIGNED" "${LABEL}-unsigned.apk"
           }
-          build_abi arm64-v8a arm64
-          build_abi armeabi-v7a armv7
+          build_abi arm64-v8a arm64 aarch64-linux-android
+          build_abi armeabi-v7a armv7 armv7-linux-androideabi
         env:
           GRADLE_OPTS: '-Xmx3072m'
 
