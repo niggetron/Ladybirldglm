@@ -159,6 +159,16 @@ jobs:
           void set_connect_broker_fd(int);
           #endif''')
           open(p, 'w').write(s)
+
+          # SystemFFmpeg.cpp / SystemFFmpegDecoders.cpp are not built on Android,
+          # but these guard only on AK_OS_LINUX (which is also defined on Android).
+          for p in ['Libraries/LibMedia/DecoderRegistrations.cpp', 'Services/MediaServer/main.cpp']:
+              s = open(p).read()
+              s = s.replace('#ifdef AK_OS_LINUX', '#if defined(AK_OS_LINUX) && !defined(AK_OS_ANDROID)')
+              s = s.replace('#if defined(AK_OS_LINUX)', '#if defined(AK_OS_LINUX) && !defined(AK_OS_ANDROID)')
+              # Don't double-negate the already-correct guard.
+              s = s.replace('defined(AK_OS_LINUX) && !defined(AK_OS_ANDROID) && !defined(AK_OS_ANDROID)', 'defined(AK_OS_LINUX) && !defined(AK_OS_ANDROID)')
+              open(p, 'w').write(s)
           PY
           echo "--- patched build.gradle.kts (version/abi lines) ---"
           grep -nE "versionCode|versionName|abiFilters" UI/Android/build.gradle.kts
