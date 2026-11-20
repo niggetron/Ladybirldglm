@@ -1,0 +1,82 @@
+name: Ladybird Expressive Wrapper APK
+
+# Builds the from-scratch Compose wrapper (Material 3 expressive-style UI:
+# vertical tab rail + arc address bar) and publishes it to Releases.
+# Note: this uses Android System WebView as renderer, not the Ladybird engine.
+
+on:
+  push:
+  schedule:
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wrapper-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Compute version
+        id: ver
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          SHA=$(git rev-parse --short=7 HEAD)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version=1.0-expressive-$DATE-$SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=wrapper-$DATE-$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build wrapper APK
+        working-directory: wrapper
+        run: ./gradlew --no-daemon assembleRelease
+        env:
+          GRADLE_OPTS: '-Xmx3072m'
+
+      - name: Sign APK
+        run: |
+          set -euo pipefail
+          UNSIGNED=$(find wrapper/app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          echo "Unsigned APK: $UNSIGNED"
+          keytool -genkeypair -v \
+            -keystore wrapper.keystore \
+            -alias wrapper \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass wrapper-sign-2026 -keypass wrapper-sign-2026 \
+            -dname "CN=Ladybird Wrapper, OU=CI, O=niggetron, L=Internet, S=Internet, C=US"
+          BT="${ANDROID_SDK_ROOT}/build-tools/35.0.0"
+          "$BT/zipalign" -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign \
+            --ks wrapper.keystore \
+            --ks-pass pass:wrapper-sign-2026 \
+            --key-pass pass:wrapper-sign-2026 \
+            --out "LadybirdExpressive-${{ steps.ver.outputs.version }}.apk" \
+            aligned.apk
+          "$BT/apksigner" verify "LadybirdExpressive-${{ steps.ver.outputs.version }}.apk"
+          ls -lh "LadybirdExpressive-${{ steps.ver.outputs.version }}.apk"
+
+      - name: Publish to GitHub Releases
+        run: |
+          APK="LadybirdExpressive-${{ steps.ver.outputs.version }}.apk"
+          gh release create "${{ steps.ver.outputs.tag }}" "$APK" \
+            --title "Ladybird Expressive Wrapper ${{ steps.ver.outputs.version }}" \
+            --notes "From-scratch Compose wrapper with a Material 3 expressive-style UI (vertical tab rail, arc address bar). Renderer: Android System WebView. This is a UI prototype, not the Ladybird engine." \
+            --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
